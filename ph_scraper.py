@@ -11,7 +11,7 @@ import argparse
 import datetime
 import random
 import logging
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple
 import pytz
 
 import requests
@@ -177,12 +177,13 @@ class ProductHuntScraper:
             logger.error(f"Unexpected error during authentication: {str(e)}")
             return False
 
-    def get_posts_by_date(self, date_str: str) -> List[Dict[str, Any]]:
+    def get_posts_by_date(self, date_str: str, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Fetch posts from Product Hunt by date
         
         Args:
             date_str: ISO format date string (YYYY-MM-DD)
+            limit: Maximum number of posts to fetch
             
         Returns:
             List of posts data
@@ -198,10 +199,14 @@ class ProductHuntScraper:
         
         logger.info(f"Fetching posts for {date_str} (from {date_str}T00:00:00Z to {next_day.strftime('%Y-%m-%d')}T00:00:00Z)")
         
-        # GraphQL query for posts - updated to match current API schema
+        # GraphQL query for posts - updated to match current API schema and handle pagination
         query = """
-        query getPosts($after: DateTime!, $before: DateTime!) {
-          posts(postedAfter: $after, postedBefore: $before, first: 50) {
+        query getPosts($after: DateTime!, $before: DateTime!, $first: Int!, $cursor: String) {
+          posts(postedAfter: $after, postedBefore: $before, first: $first, after: $cursor) {
+            pageInfo {
+              endCursor
+              hasNextPage
+            }
             edges {
               node {
                 id
@@ -242,65 +247,390 @@ class ProductHuntScraper:
         variables = {
             "after": f"{date_str}T00:00:00Z",
             "before": f"{next_day.strftime('%Y-%m-%d')}T00:00:00Z",
+            "first": 50  # Max number of items per page
         }
 
-        payload = {"query": query, "variables": variables}
+        all_posts = []
+        has_next_page = True
+        cursor = None
         
-        # Implement retry logic with exponential backoff
-        for attempt in range(MAX_RETRIES):
-            try:
-                # Apply delay and get headers
-                self._delay_request()
-                headers = self._prepare_headers()
+        # Implement pagination to get all posts
+        while has_next_page and (len(all_posts) < limit or limit <= 0):
+            if cursor:
+                variables["cursor"] = cursor
                 
-                # Make the request
-                response = requests.post(API_URL, json=payload, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-                
-                # Check for GraphQL errors
-                if "errors" in data:
-                    logger.error(f"API returned errors: {data['errors']}")
+            payload = {"query": query, "variables": variables}
+            
+            # Implement retry logic with exponential backoff
+            for attempt in range(MAX_RETRIES):
+                try:
+                    # Apply delay and get headers
+                    self._delay_request()
+                    headers = self._prepare_headers()
+                    
+                    # Make the request
+                    response = requests.post(API_URL, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # Check for GraphQL errors
+                    if "errors" in data:
+                        logger.error(f"API returned errors: {data['errors']}")
+                        if attempt < MAX_RETRIES - 1:
+                            # Calculate backoff delay
+                            delay = (RETRY_DELAY * (2 ** attempt)) * random.uniform(0.8, 1.2)
+                            logger.info(f"Retrying in {delay:.2f}s (attempt {attempt+1}/{MAX_RETRIES})")
+                            time.sleep(delay)
+                            continue
+                        return all_posts
+                    
+                    # Check if data structure is valid
+                    if not data or "data" not in data or "posts" not in data["data"] or "edges" not in data["data"]["posts"]:
+                        logger.error(f"Unexpected API response structure for {date_str}")
+                        if attempt < MAX_RETRIES - 1:
+                            delay = (RETRY_DELAY * (2 ** attempt)) * random.uniform(0.8, 1.2)
+                            logger.info(f"Retrying in {delay:.2f}s (attempt {attempt+1}/{MAX_RETRIES})")
+                            time.sleep(delay)
+                            continue
+                        return all_posts
+                    
+                    # Extract pagination info
+                    page_info = data["data"]["posts"].get("pageInfo", {})
+                    has_next_page = page_info.get("hasNextPage", False)
+                    cursor = page_info.get("endCursor", None)
+                    
+                    # Extract posts from response
+                    posts = [edge["node"] for edge in data["data"]["posts"]["edges"]]
+                    all_posts.extend(posts)
+                    
+                    logger.info(f"Fetched {len(posts)} posts (total: {len(all_posts)})")
+                    
+                    # Occasionally simulate a user pausing
+                    if self.use_stealth and random.random() < 0.15:
+                        pause_time = random.uniform(3.0, 8.0)
+                        logger.info(f"Taking a short pause for {pause_time:.2f}s")
+                        time.sleep(pause_time)
+                    
+                    # Break the retry loop since we got a successful response
+                    break
+                    
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Request failed (attempt {attempt+1}/{MAX_RETRIES}): {str(e)}")
                     if attempt < MAX_RETRIES - 1:
                         # Calculate backoff delay
                         delay = (RETRY_DELAY * (2 ** attempt)) * random.uniform(0.8, 1.2)
-                        logger.info(f"Retrying in {delay:.2f}s (attempt {attempt+1}/{MAX_RETRIES})")
+                        logger.info(f"Retrying in {delay:.2f}s")
                         time.sleep(delay)
-                        continue
-                    return []
+                    else:
+                        logger.error(f"Failed to fetch posts for {date_str} after {MAX_RETRIES} attempts")
+                        return all_posts
+            
+            # Check if we've reached the limit
+            if 0 < limit <= len(all_posts):
+                logger.info(f"Reached post limit of {limit}")
+                break
                 
-                # Check if data structure is valid
-                if not data or "data" not in data or "posts" not in data["data"] or "edges" not in data["data"]["posts"]:
-                    logger.error(f"Unexpected API response structure for {date_str}")
+            # If we have next page, we need to continue pagination
+            if has_next_page:
+                logger.info(f"Fetching next page with cursor: {cursor}")
+            else:
+                logger.info(f"No more pages to fetch")
+        
+        logger.info(f"Successfully fetched {len(all_posts)} posts for {date_str}")
+        return all_posts
+
+    def get_top_posts(self, time_period: str = "today", limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Fetch top posts from Product Hunt based on time period
+        
+        Args:
+            time_period: Time period to fetch posts for (today, yesterday, week, month)
+            limit: Maximum number of posts to fetch
+            
+        Returns:
+            List of posts data
+        """
+        # Ensure we have a valid token
+        if not self.authenticate():
+            logger.error("Authentication failed. Cannot fetch posts.")
+            return []
+            
+        # Define the query for top posts based on time period
+        # For top posts, we'll use the appropriate filter and sort by votes
+        query = """
+        query getTopPosts($first: Int!, $cursor: String) {
+          posts(order: VOTES, first: $first, after: $cursor) {
+            pageInfo {
+              endCursor
+              hasNextPage
+            }
+            edges {
+              node {
+                id
+                name
+                tagline
+                description
+                url
+                website
+                votesCount
+                commentsCount
+                createdAt
+                topics {
+                  edges {
+                    node {
+                      name
+                    }
+                  }
+                }
+                thumbnail {
+                  url
+                }
+                media {
+                  url
+                  type
+                }
+                makers {
+                  id
+                  name
+                  username
+                  profileImage
+                }
+              }
+            }
+          }
+        }
+        """
+        
+        # For today/yesterday, use date filtering instead
+        if time_period.lower() in ["today", "yesterday"]:
+            # Get today's date
+            if time_period.lower() == "today":
+                # Get today's date in PST (Product Hunt's timezone)
+                now_utc = datetime.datetime.now(pytz.UTC)
+                now_pst = now_utc.astimezone(pytz.timezone('US/Pacific'))
+                date_str = now_pst.date().isoformat()
+                logger.info(f"Fetching today's top posts for PST date: {date_str}")
+                return self.get_posts_by_date(date_str, limit=limit)
+            else:  # yesterday
+                # Get yesterday's date in PST
+                now_utc = datetime.datetime.now(pytz.UTC)
+                now_pst = now_utc.astimezone(pytz.timezone('US/Pacific'))
+                yesterday = now_pst.date() - datetime.timedelta(days=1)
+                date_str = yesterday.isoformat()
+                logger.info(f"Fetching yesterday's top posts for PST date: {date_str}")
+                return self.get_posts_by_date(date_str, limit=limit)
+                
+        # For week/month/all_time, we need to modify the query to filter by created date
+        if time_period.lower() == "week":
+            # Get posts from the last 7 days
+            now_utc = datetime.datetime.now(pytz.UTC)
+            now_pst = now_utc.astimezone(pytz.timezone('US/Pacific'))
+            week_ago = now_pst.date() - datetime.timedelta(days=7)
+            
+            query = """
+            query getWeekPosts($after: DateTime!, $first: Int!, $cursor: String) {
+              posts(postedAfter: $after, order: VOTES, first: $first, after: $cursor) {
+                pageInfo {
+                  endCursor
+                  hasNextPage
+                }
+                edges {
+                  node {
+                    id
+                    name
+                    tagline
+                    description
+                    url
+                    website
+                    votesCount
+                    commentsCount
+                    createdAt
+                    topics {
+                      edges {
+                        node {
+                          name
+                        }
+                      }
+                    }
+                    thumbnail {
+                      url
+                    }
+                    media {
+                      url
+                      type
+                    }
+                    makers {
+                      id
+                      name
+                      username
+                      profileImage
+                    }
+                  }
+                }
+              }
+            }
+            """
+            
+            variables = {
+                "after": f"{week_ago.isoformat()}T00:00:00Z",
+                "first": 50  # Max number of items per page
+            }
+            
+            logger.info(f"Fetching top posts for the last week (after {week_ago.isoformat()})")
+            
+        elif time_period.lower() == "month":
+            # Get posts from the last 30 days
+            now_utc = datetime.datetime.now(pytz.UTC)
+            now_pst = now_utc.astimezone(pytz.timezone('US/Pacific'))
+            month_ago = now_pst.date() - datetime.timedelta(days=30)
+            
+            query = """
+            query getMonthPosts($after: DateTime!, $first: Int!, $cursor: String) {
+              posts(postedAfter: $after, order: VOTES, first: $first, after: $cursor) {
+                pageInfo {
+                  endCursor
+                  hasNextPage
+                }
+                edges {
+                  node {
+                    id
+                    name
+                    tagline
+                    description
+                    url
+                    website
+                    votesCount
+                    commentsCount
+                    createdAt
+                    topics {
+                      edges {
+                        node {
+                          name
+                        }
+                      }
+                    }
+                    thumbnail {
+                      url
+                    }
+                    media {
+                      url
+                      type
+                    }
+                    makers {
+                      id
+                      name
+                      username
+                      profileImage
+                    }
+                  }
+                }
+              }
+            }
+            """
+            
+            variables = {
+                "after": f"{month_ago.isoformat()}T00:00:00Z",
+                "first": 50  # Max number of items per page
+            }
+            
+            logger.info(f"Fetching top posts for the last month (after {month_ago.isoformat()})")
+            
+        else:  # all_time or any other value
+            # For all-time, just sort by votes without date filtering
+            variables = {
+                "first": 50  # Max number of items per page
+            }
+            
+            logger.info(f"Fetching all-time top posts")
+        
+        all_posts = []
+        has_next_page = True
+        cursor = None
+        
+        # Implement pagination to get all posts
+        while has_next_page and (len(all_posts) < limit or limit <= 0):
+            if cursor:
+                variables["cursor"] = cursor
+                
+            payload = {"query": query, "variables": variables}
+            
+            # Implement retry logic with exponential backoff
+            for attempt in range(MAX_RETRIES):
+                try:
+                    # Apply delay and get headers
+                    self._delay_request()
+                    headers = self._prepare_headers()
+                    
+                    # Make the request
+                    response = requests.post(API_URL, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # Check for GraphQL errors
+                    if "errors" in data:
+                        logger.error(f"API returned errors: {data['errors']}")
+                        if attempt < MAX_RETRIES - 1:
+                            # Calculate backoff delay
+                            delay = (RETRY_DELAY * (2 ** attempt)) * random.uniform(0.8, 1.2)
+                            logger.info(f"Retrying in {delay:.2f}s (attempt {attempt+1}/{MAX_RETRIES})")
+                            time.sleep(delay)
+                            continue
+                        return all_posts
+                        
+                    # Check if data structure is valid
+                    if not data or "data" not in data or "posts" not in data["data"] or "edges" not in data["data"]["posts"]:
+                        logger.error(f"Unexpected API response structure for top posts")
+                        if attempt < MAX_RETRIES - 1:
+                            delay = (RETRY_DELAY * (2 ** attempt)) * random.uniform(0.8, 1.2)
+                            logger.info(f"Retrying in {delay:.2f}s (attempt {attempt+1}/{MAX_RETRIES})")
+                            time.sleep(delay)
+                            continue
+                        return all_posts
+                    
+                    # Extract pagination info
+                    page_info = data["data"]["posts"].get("pageInfo", {})
+                    has_next_page = page_info.get("hasNextPage", False)
+                    cursor = page_info.get("endCursor", None)
+                    
+                    # Extract posts from response
+                    posts = [edge["node"] for edge in data["data"]["posts"]["edges"]]
+                    all_posts.extend(posts)
+                    
+                    logger.info(f"Fetched {len(posts)} top posts (total: {len(all_posts)})")
+                    
+                    # Occasionally simulate a user pausing
+                    if self.use_stealth and random.random() < 0.15:
+                        pause_time = random.uniform(3.0, 8.0)
+                        logger.info(f"Taking a short pause for {pause_time:.2f}s")
+                        time.sleep(pause_time)
+                    
+                    # Break the retry loop since we got a successful response
+                    break
+                    
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Request failed (attempt {attempt+1}/{MAX_RETRIES}): {str(e)}")
                     if attempt < MAX_RETRIES - 1:
+                        # Calculate backoff delay
                         delay = (RETRY_DELAY * (2 ** attempt)) * random.uniform(0.8, 1.2)
-                        logger.info(f"Retrying in {delay:.2f}s (attempt {attempt+1}/{MAX_RETRIES})")
+                        logger.info(f"Retrying in {delay:.2f}s")
                         time.sleep(delay)
-                        continue
-                    return []
+                    else:
+                        logger.error(f"Failed to fetch top posts after {MAX_RETRIES} attempts")
+                        return all_posts
+            
+            # Check if we've reached the limit
+            if 0 < limit <= len(all_posts):
+                logger.info(f"Reached post limit of {limit}")
+                break
                 
-                # Extract posts from response
-                posts = [edge["node"] for edge in data["data"]["posts"]["edges"]]
-                logger.info(f"Successfully fetched {len(posts)} posts for {date_str}")
-                
-                # Occasionally simulate a user pausing
-                if self.use_stealth and random.random() < 0.15:
-                    pause_time = random.uniform(3.0, 8.0)
-                    logger.info(f"Taking a short pause for {pause_time:.2f}s")
-                    time.sleep(pause_time)
-                
-                return posts
-                
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Request failed (attempt {attempt+1}/{MAX_RETRIES}): {str(e)}")
-                if attempt < MAX_RETRIES - 1:
-                    # Calculate backoff delay
-                    delay = (RETRY_DELAY * (2 ** attempt)) * random.uniform(0.8, 1.2)
-                    logger.info(f"Retrying in {delay:.2f}s")
-                    time.sleep(delay)
-                else:
-                    logger.error(f"Failed to fetch posts for {date_str} after {MAX_RETRIES} attempts")
-                    return []
+            # If we have next page, we need to continue pagination
+            if has_next_page and cursor:
+                logger.info(f"Fetching next page with cursor: {cursor}")
+            else:
+                logger.info(f"No more pages to fetch")
+        
+        logger.info(f"Successfully fetched {len(all_posts)} top posts for {time_period}")
+        return all_posts
 
     def process_post_data(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Process raw post data into structured format for export"""
@@ -351,13 +681,14 @@ class ProductHuntScraper:
             
         return processed_posts
 
-    def scrape_recent_days(self, days: int = 3, use_pst: bool = False) -> List[Dict[str, Any]]:
+    def scrape_recent_days(self, days: int = 3, use_pst: bool = False, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Scrape posts from the past N days
         
         Args:
             days: Number of days to scrape (default: 3)
             use_pst: Whether to use PST timezone for date calculations
+            limit: Maximum number of posts to fetch per day
             
         Returns:
             Combined list of processed posts
@@ -395,7 +726,7 @@ class ProductHuntScraper:
             logger.info(f"Scraping posts for {day_label} ({date_str})...")
             
             # Get posts for this date
-            posts = self.get_posts_by_date(date_str)
+            posts = self.get_posts_by_date(date_str, limit=limit)
             
             # Process the posts
             processed_posts = self.process_post_data(posts)
@@ -405,6 +736,37 @@ class ProductHuntScraper:
             if i < days - 1 and self.use_stealth:
                 delay = random.uniform(2.0, 5.0)
                 logger.info(f"Waiting {delay:.2f}s before fetching next day")
+                time.sleep(delay)
+        
+        return all_posts
+
+    def scrape_top_posts(self, time_periods: List[str] = ["today"], limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Scrape top posts based on different time periods
+        
+        Args:
+            time_periods: List of time periods to fetch (today, yesterday, week, month, all_time)
+            limit: Maximum number of posts to fetch per time period
+            
+        Returns:
+            Combined list of processed posts
+        """
+        all_posts = []
+        
+        for period in time_periods:
+            logger.info(f"Scraping top posts for {period}...")
+            
+            # Get top posts for this time period
+            posts = self.get_top_posts(period, limit=limit)
+            
+            # Process the posts
+            processed_posts = self.process_post_data(posts)
+            all_posts.extend(processed_posts)
+            
+            # Add a delay between time periods to avoid triggering rate limits
+            if period != time_periods[-1] and self.use_stealth:
+                delay = random.uniform(2.0, 5.0)
+                logger.info(f"Waiting {delay:.2f}s before fetching next time period")
                 time.sleep(delay)
         
         return all_posts
@@ -458,6 +820,25 @@ def main():
         action="store_true",
         help="Use PST timezone (Product Hunt's timezone) instead of UTC"
     )
+    parser.add_argument(
+        "--mode",
+        choices=["date", "top"],
+        default="date",
+        help="Scraping mode: date-based or top posts"
+    )
+    parser.add_argument(
+        "--periods",
+        nargs="+",
+        default=["today"],
+        choices=["today", "yesterday", "week", "month", "all_time"],
+        help="Time periods for top posts mode (can specify multiple)"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum number of posts to fetch per day/period"
+    )
     args = parser.parse_args()
     
     try:
@@ -472,13 +853,19 @@ def main():
             logger.info(f"Current time (PST/Product Hunt timezone): {now_pst}")
             logger.info(f"Using PST timezone for date calculations")
         
-        # Scrape data
-        posts = scraper.scrape_recent_days(args.days, use_pst=args.use_pst)
+        # Scrape data based on mode
+        if args.mode == "date":
+            logger.info(f"Running in date-based mode for {args.days} days with limit {args.limit} posts per day")
+            posts = scraper.scrape_recent_days(args.days, use_pst=args.use_pst, limit=args.limit)
+        else:  # top mode
+            logger.info(f"Running in top posts mode for periods: {', '.join(args.periods)} with limit {args.limit} posts per period")
+            posts = scraper.scrape_top_posts(args.periods, limit=args.limit)
         
         # Export data
         if posts:
             if scraper.export_to_csv(posts, args.output):
                 logger.info(f"Scraping completed successfully! Data saved to {args.output}")
+                logger.info(f"Total posts scraped: {len(posts)}")
             else:
                 logger.error("Failed to export data")
                 return 1
