@@ -17,12 +17,15 @@ from ph_scraper import ProductHuntScraper
 from ph_analyzer import ProductHuntAnalyzer
 import logging
 
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("streamlit_app.log"),
+        logging.FileHandler(os.path.join("logs", "streamlit_app.log")),
         logging.StreamHandler()
     ]
 )

@@ -13,12 +13,15 @@ from typing import Dict, List, Any, Optional, Tuple
 from collections import Counter
 from dotenv import load_dotenv
 
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("ph_analyzer.log"),
+        logging.FileHandler(os.path.join("logs", "ph_analyzer.log")),
         logging.StreamHandler()
     ]
 )
@@ -282,7 +285,7 @@ class ProductHuntAnalyzer:
                         {"role": "system", "content": "You are a data analyst specializing in tech industry trends."},
                         {"role": "user", "content": prompt}
                     ],
-                    model="llama3-70b-8192",
+                    model="llama-3.3-70b-versatile",
                     temperature=0.1,
                     max_tokens=2000
                 )
@@ -294,7 +297,7 @@ class ProductHuntAnalyzer:
                         {"role": "system", "content": "You are a data analyst specializing in tech industry trends."},
                         {"role": "user", "content": prompt}
                     ],
-                    model="llama3-8b-8192",
+                    model="llama-3.3-70b-versatile",
                     temperature=0.1,
                     max_tokens=2000
                 )

@@ -18,12 +18,15 @@ import requests
 import pandas as pd
 from dotenv import load_dotenv
 
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("ph_scraper.log"),
+        logging.FileHandler(os.path.join("logs", "ph_scraper.log")),
         logging.StreamHandler(sys.stdout)
     ]
 )

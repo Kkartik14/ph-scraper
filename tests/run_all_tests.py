@@ -4,8 +4,25 @@ import os
 import sys
 import subprocess
 import time
+import logging
+from datetime import datetime
+
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join("logs", "test_results.log")),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("TestRunner")
 
 def run_test(test_script, description):
+    logger.info(f"Starting test: {description}")
     print(f"\n{'='*80}")
     print(f"RUNNING TEST: {description}")
     print(f"{'='*80}")
@@ -19,15 +36,21 @@ def run_test(test_script, description):
     print(result.stdout)
     
     if result.returncode == 0:
-        print(f"\n✅ PASSED: {description} ({elapsed:.2f}s)")
+        status_msg = f"✅ PASSED: {description} ({elapsed:.2f}s)"
+        logger.info(status_msg)
+        print(f"\n{status_msg}")
         return True
     else:
-        print(f"\n❌ FAILED: {description} ({elapsed:.2f}s)")
+        status_msg = f"❌ FAILED: {description} ({elapsed:.2f}s)"
+        logger.error(status_msg)
+        print(f"\n{status_msg}")
         if result.stderr:
+            logger.error(f"Error details: {result.stderr}")
             print(f"Error details:\n{result.stderr}")
         return False
 
 def main():
+    logger.info(f"=== Starting test suite at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     print("\n" + "="*80)
     print("PRODUCT HUNT SCRAPER & ANALYZER TEST SUITE")
     print("="*80 + "\n")
@@ -53,17 +76,24 @@ def main():
     passed = sum(1 for result in results.values() if result)
     total = len(results)
     
+    summary_line = f"Passed {passed} of {total} tests ({passed/total*100:.1f}%)"
+    logger.info(summary_line)
+    
     for description, result in results.items():
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{status}: {description}")
     
-    print(f"\nPassed {passed} of {total} tests ({passed/total*100:.1f}%)")
+    print(f"\n{summary_line}")
     
     if passed == total:
-        print("\n🎉 All tests passed! 🎉")
+        success_msg = "🎉 All tests passed! 🎉"
+        logger.info(success_msg)
+        print(f"\n{success_msg}")
         return 0
     else:
-        print("\n⚠️ Some tests failed. Please review the output above. ⚠️")
+        failure_msg = "⚠️ Some tests failed. Please review the output above. ⚠️"
+        logger.warning(failure_msg)
+        print(f"\n{failure_msg}")
         return 1
 
 if __name__ == "__main__":
