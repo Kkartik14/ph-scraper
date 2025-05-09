@@ -7,10 +7,10 @@ import os
 import json
 import logging
 import pandas as pd
+import numpy as np  # Add numpy import
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from collections import Counter
-import groq
 from dotenv import load_dotenv
 
 # Set up logging
@@ -26,6 +26,18 @@ logger = logging.getLogger("PHAnalyzer")
 
 # Load environment variables
 load_dotenv()
+
+# Custom JSON encoder to handle numpy types
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy data types"""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 class ProductHuntAnalyzer:
     """Analyzes Product Hunt data to identify trends and patterns"""
@@ -46,10 +58,30 @@ class ProductHuntAnalyzer:
         
         # Initialize Groq client for LLM analysis
         groq_api_key = os.getenv("GROQ_API_KEY")
+        
+        # Clean the API key if it has URL-encoded characters
+        if groq_api_key and '%' in groq_api_key:
+            import urllib.parse
+            try:
+                groq_api_key = urllib.parse.unquote(groq_api_key)
+                logger.info("Cleaned GROQ_API_KEY to remove URL encoding")
+            except Exception as e:
+                logger.error(f"Failed to clean GROQ_API_KEY: {str(e)}")
+            
         if not groq_api_key:
             logger.warning("GROQ_API_KEY not found in environment. LLM analysis will not be available.")
-        
-        self.groq_client = groq.Groq(api_key=groq_api_key) if groq_api_key else None
+            self.groq_client = None
+        else:
+            try:
+                # Using the successful approach with manual HTTP client to avoid the proxies issue
+                import httpx
+                from groq import Groq
+                http_client = httpx.Client()
+                self.groq_client = Groq(api_key=groq_api_key, http_client=http_client)
+                logger.info("Groq client initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Groq client: {str(e)}")
+                self.groq_client = None
         
     def load_data(self) -> bool:
         """
@@ -242,18 +274,32 @@ class ProductHuntAnalyzer:
         """
         
         try:
-            # Call Groq LLM API
-            completion = self.groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=[
-                    {"role": "system", "content": "You are a data analyst specializing in tech industry trends."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=2000
-            )
+            # Call Groq LLM API with the latest client structure
+            try:
+                # Try with llama3-70b-8192 first
+                completion = self.groq_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": "You are a data analyst specializing in tech industry trends."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    model="llama3-70b-8192",
+                    temperature=0.1,
+                    max_tokens=2000
+                )
+            except Exception as model_error:
+                logger.warning(f"Failed with model llama3-70b-8192: {str(model_error)}. Trying fallback model.")
+                # Try with llama3-8b-8192 as fallback
+                completion = self.groq_client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": "You are a data analyst specializing in tech industry trends."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    model="llama3-8b-8192",
+                    temperature=0.1,
+                    max_tokens=2000
+                )
             
-            # Extract and parse the response
+            # Extract the response text
             response_text = completion.choices[0].message.content
             
             # Try to parse as JSON
@@ -299,13 +345,13 @@ class ProductHuntAnalyzer:
             # Save basic stats
             basic_stats = self.analyze_basic_stats()
             with open(f"{output_dir}/basic_stats.json", "w") as f:
-                json.dump(basic_stats, f, indent=2)
+                json.dump(basic_stats, f, indent=2, cls=NumpyEncoder)
             
             # Save topic analysis
             if self.topics_count is None:
                 self.analyze_topics()
             with open(f"{output_dir}/topic_analysis.json", "w") as f:
-                json.dump(self.topics_count, f, indent=2)
+                json.dump(self.topics_count, f, indent=2, cls=NumpyEncoder)
             
             # Save daily trends
             if self.daily_stats is None:
@@ -318,9 +364,22 @@ class ProductHuntAnalyzer:
             self.top_products.to_csv(f"{output_dir}/top_products.csv", index=False)
             
             # Save LLM analysis if available
-            if self.trend_analysis:
+            if hasattr(self, 'trend_analysis') and self.trend_analysis:
                 with open(f"{output_dir}/llm_trend_analysis.json", "w") as f:
-                    json.dump(self.trend_analysis, f, indent=2)
+                    json.dump(self.trend_analysis, f, indent=2, cls=NumpyEncoder)
+            else:
+                # Create a default/empty trend analysis to avoid missing file errors
+                default_analysis = {
+                    "error": "LLM analysis not available",
+                    "trending_categories": "No data available",
+                    "emerging_categories": "No data available",
+                    "product_patterns": "No data available",
+                    "b2b_trends": "No data available",
+                    "b2c_trends": "No data available",
+                    "ai_trends": "No data available"
+                }
+                with open(f"{output_dir}/llm_trend_analysis.json", "w") as f:
+                    json.dump(default_analysis, f, indent=2)
             
             logger.info(f"Analysis results saved to {output_dir}/ directory")
             return True

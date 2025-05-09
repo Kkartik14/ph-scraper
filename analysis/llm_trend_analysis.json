@@ -1,0 +1,37 @@
+{
+  "trending_categories": [
+    "Artificial Intelligence",
+    "Productivity",
+    "SaaS",
+    "Developer Tools",
+    "Marketing"
+  ],
+  "emerging_categories": [
+    "Fintech",
+    "Health & Fitness",
+    "No-Code",
+    "Web3"
+  ],
+  "product_patterns": [
+    "AI-powered productivity tools",
+    "AI-driven sales and marketing automation",
+    "AI-based design and development tools",
+    "AI-integrated analytics and data visualization"
+  ],
+  "b2b_trends": [
+    "AI-powered sales and marketing automation",
+    "AI-driven customer service and communication",
+    "AI-integrated analytics and data visualization"
+  ],
+  "b2c_trends": [
+    "AI-powered productivity and organization tools",
+    "AI-driven health and fitness tracking",
+    "AI-integrated design and development tools"
+  ],
+  "ai_trends": [
+    "AI-powered productivity and organization",
+    "AI-driven sales and marketing automation",
+    "AI-integrated analytics and data visualization",
+    "AI-powered customer service and communication"
+  ]
+}

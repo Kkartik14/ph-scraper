@@ -11,6 +11,22 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from typing import Dict, List, Any
+import sys
+import time
+from ph_scraper import ProductHuntScraper
+from ph_analyzer import ProductHuntAnalyzer
+import logging
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("streamlit_app.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("StreamlitApp")
 
 # Set page configuration
 st.set_page_config(
@@ -47,6 +63,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Default CSV filename
+DEFAULT_CSV_FILENAME = "product_hunt_data.csv"
+
 def load_analysis_data(base_dir: str = "analysis") -> Dict[str, Any]:
     """
     Load analysis data from files
@@ -80,9 +99,19 @@ def load_analysis_data(base_dir: str = "analysis") -> Dict[str, Any]:
     daily_path = os.path.join(base_dir, "daily_trends.csv")
     if os.path.exists(daily_path):
         data["daily"] = pd.read_csv(daily_path)
-        # Convert date column to datetime
+        
+        # Check for date column and convert to datetime
+        date_col = None
         if "date" in data["daily"].columns:
-            data["daily"]["date"] = pd.to_datetime(data["daily"]["date"])
+            date_col = "date"
+        elif "index" in data["daily"].columns:
+            date_col = "index"
+            # Rename index to date for consistency
+            data["daily"] = data["daily"].rename(columns={"index": "date"})
+            
+        # Convert date column to datetime if found
+        if date_col:
+            data["daily"][date_col] = pd.to_datetime(data["daily"][date_col])
     
     # Load top products
     top_path = os.path.join(base_dir, "top_products.csv")
@@ -100,7 +129,7 @@ def load_analysis_data(base_dir: str = "analysis") -> Dict[str, Any]:
     
     return data
 
-def load_raw_data(file_path: str = "product_hunt_30_days.csv") -> pd.DataFrame:
+def load_raw_data(file_path: str = DEFAULT_CSV_FILENAME) -> pd.DataFrame:
     """
     Load raw Product Hunt data from CSV
     
@@ -125,8 +154,8 @@ def display_header():
     """Display the app header and introduction"""
     st.markdown('<p class="main-header">Product Hunt Trends Analyzer 🚀</p>', unsafe_allow_html=True)
     st.markdown("""
-    This dashboard visualizes trends and patterns in recent Product Hunt launches, 
-    identifying popular categories, emerging trends, and successful product characteristics.
+    This dashboard allows you to scrape Product Hunt data, visualize trends and patterns,
+    identify popular categories, emerging trends, and analyze successful product characteristics.
     """)
     st.markdown("---")
 
@@ -135,33 +164,255 @@ def display_sidebar_controls():
     st.sidebar.header("📊 Dashboard Controls")
     
     view_options = [
+        "Data Collection",
+        "Raw CSV Data",
         "Overview",
         "Topic Analysis",
         "Daily Trends",
         "Top Products",
-        "AI & B2B Trends (LLM Analysis)",
-        "Raw Data"
+        "AI & B2B Trends (LLM Analysis)"
     ]
     
     selected_view = st.sidebar.radio("Select View", view_options)
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Data Info")
-    st.sidebar.markdown("This analysis is based on Product Hunt launches from the last 30 days.")
+    
+    # Get CSV file info if it exists
+    if os.path.exists(DEFAULT_CSV_FILENAME):
+        file_stats = os.stat(DEFAULT_CSV_FILENAME)
+        file_size = file_stats.st_size / 1024  # Convert to KB
+        modified_time = datetime.fromtimestamp(file_stats.st_mtime)
+        
+        st.sidebar.markdown(f"**Data file:** {DEFAULT_CSV_FILENAME}")
+        st.sidebar.markdown(f"**Size:** {file_size:.2f} KB")
+        st.sidebar.markdown(f"**Last updated:** {modified_time.strftime('%Y-%m-%d %H:%M')}")
+        
+        # Try to get row count
+        try:
+            df = pd.read_csv(DEFAULT_CSV_FILENAME)
+            st.sidebar.markdown(f"**Products:** {len(df)} items")
+        except:
+            pass
+    else:
+        st.sidebar.warning("No data file found. Please collect data first.")
     
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🔄 Update Data")
-    if st.sidebar.button("Run Scraper (30 Days)"):
-        st.sidebar.warning("Scraper is running... This may take several minutes.")
-        # This would trigger the scraper in a real implementation
-        st.sidebar.success("Scraper completed! Refresh the page to see updated data.")
-    
-    if st.sidebar.button("Run Analysis"):
-        st.sidebar.warning("Analyzer is running...")
-        # This would trigger the analyzer in a real implementation
-        st.sidebar.success("Analysis completed! Refresh the page to see updated results.")
     
     return selected_view
+
+def run_scraper(days: int, use_pst: bool, output_file: str, stealth: bool, max_per_day: int):
+    """Run the Product Hunt scraper"""
+    with st.spinner(f"Scraping Product Hunt data for the last {days} days..."):
+        # Create progress bar
+        progress_bar = st.progress(0)
+        
+        # Initialize scraper
+        scraper = ProductHuntScraper(use_stealth=stealth)
+        
+        # Scrape data
+        posts = scraper.scrape_recent_days(days=days, use_pst=use_pst, limit=max_per_day)
+        
+        # Update progress bar to 75%
+        progress_bar.progress(75)
+        
+        # Export to CSV
+        success = False
+        if posts:
+            success = scraper.export_to_csv(posts, output_file)
+            if success:
+                st.success(f"Successfully scraped {len(posts)} products over {days} days. Data saved to {output_file}.")
+            else:
+                st.error("Failed to export data to CSV.")
+        else:
+            st.warning("No data was retrieved. Please check your API credentials.")
+        
+        # Complete progress bar
+        progress_bar.progress(100)
+        
+        return success
+
+def run_analyzer(input_file: str):
+    """Run the Product Hunt analyzer"""
+    with st.spinner("Analyzing Product Hunt data..."):
+        # Create progress bar
+        progress_bar = st.progress(0)
+        
+        # Ensure the analysis directory exists
+        os.makedirs("analysis", exist_ok=True)
+        
+        # Initialize analyzer
+        analyzer = ProductHuntAnalyzer(data_file=input_file)
+        
+        # Load data
+        if not analyzer.load_data():
+            st.error("Failed to load data from CSV.")
+            return False
+        
+        progress_bar.progress(25)
+        
+        # Run analysis
+        analyzer.analyze_basic_stats()
+        progress_bar.progress(40)
+        
+        analyzer.analyze_topics()
+        progress_bar.progress(55)
+        
+        analyzer.analyze_daily_trends()
+        progress_bar.progress(70)
+        
+        analyzer.get_top_products()
+        progress_bar.progress(85)
+        
+        # Try LLM analysis if possible
+        if analyzer.groq_client is None:
+            st.info("Skipping LLM analysis since GROQ_API_KEY is not configured. All other analyses will still work.")
+        else:
+            try:
+                analyzer.analyze_with_llm()
+            except Exception as e:
+                st.warning(f"LLM analysis failed: {str(e)}. Make sure your GROQ_API_KEY is set correctly.")
+        
+        progress_bar.progress(95)
+        
+        # Save analysis
+        success = analyzer.save_analysis()
+        
+        progress_bar.progress(100)
+        
+        if success:
+            st.success("Analysis completed successfully!")
+        else:
+            st.error("Failed to save analysis results.")
+        
+        return success
+
+def display_data_collection():
+    """Display the data collection interface"""
+    st.markdown('<p class="sub-header">Data Collection</p>', unsafe_allow_html=True)
+    
+    st.write("Collect data from Product Hunt by specifying how many days to scrape.")
+    
+    # Collection parameters
+    with st.form("scraper_form"):
+        days = st.slider("Number of days to scrape", min_value=1, max_value=90, value=30, help="Number of days to go back from today")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            use_pst = st.checkbox("Use PST timezone (Product Hunt's timezone)", value=True, 
+                                 help="Enable this to use PST timezone for date calculations")
+            stealth = st.checkbox("Use stealth mode", value=True, 
+                                 help="Enable randomized delays and user agent rotation to avoid detection")
+        
+        with col2:
+            max_per_day = st.number_input("Max products per day (0 = unlimited)", min_value=0, value=0, 
+                                         help="Limit the number of products to fetch per day. 0 means no limit.")
+            output_file = st.text_input("Output filename", value=DEFAULT_CSV_FILENAME, 
+                                       help="Name of the CSV file to save the data to")
+        
+        submit_button = st.form_submit_button("Start Scraping")
+        
+        if submit_button:
+            # Check file existence and ask for confirmation if it exists
+            if os.path.exists(output_file):
+                st.warning(f"File {output_file} already exists.")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Overwrite Existing File"):
+                        run_scraper(days, use_pst, output_file, stealth, max_per_day)
+                with col2:
+                    if st.button("Cancel"):
+                        st.info("Scraping cancelled. Please choose a different filename.")
+            else:
+                run_scraper(days, use_pst, output_file, stealth, max_per_day)
+    
+    # Analysis section
+    st.markdown("---")
+    st.markdown("### 📊 Run Analysis")
+    st.write("After collecting the data, you can run the analyzer to generate insights.")
+    
+    csv_files = [f for f in os.listdir() if f.endswith('.csv')]
+    
+    if not csv_files:
+        st.warning("No CSV files found. Please scrape data first.")
+    else:
+        with st.form("analyzer_form"):
+            input_file = st.selectbox("Select CSV file to analyze", csv_files, 
+                                     index=csv_files.index(DEFAULT_CSV_FILENAME) if DEFAULT_CSV_FILENAME in csv_files else 0)
+            
+            analyze_button = st.form_submit_button("Run Analysis")
+            
+            if analyze_button:
+                run_analyzer(input_file)
+
+def display_raw_csv_data(csv_file: str = DEFAULT_CSV_FILENAME):
+    """Display the raw CSV data"""
+    st.markdown('<p class="sub-header">Raw CSV Data</p>', unsafe_allow_html=True)
+    
+    # List available CSV files
+    csv_files = [f for f in os.listdir() if f.endswith('.csv')]
+    
+    if not csv_files:
+        st.warning("No CSV files found. Please collect data first.")
+        return
+    
+    # Select file
+    selected_file = st.selectbox("Select CSV file to view", csv_files,
+                               index=csv_files.index(csv_file) if csv_file in csv_files else 0)
+    
+    # Load and display data
+    if os.path.exists(selected_file):
+        df = pd.read_csv(selected_file)
+        
+        # File stats
+        st.markdown("### File Information")
+        file_stats = os.stat(selected_file)
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Products", len(df))
+        
+        with col2:
+            st.metric("File Size", f"{file_stats.st_size / 1024:.2f} KB")
+        
+        with col3:
+            modified_time = datetime.fromtimestamp(file_stats.st_mtime)
+            st.metric("Last Modified", modified_time.strftime("%Y-%m-%d"))
+        
+        # Search and filter options
+        st.markdown("### Search and Filter")
+        
+        search_term = st.text_input("Search in all text fields", "")
+        
+        # Filter dataframe based on search term
+        if search_term:
+            filtered_df = df[df.astype(str).apply(lambda row: any(search_term.lower() in str(val).lower() for val in row), axis=1)]
+        else:
+            filtered_df = df
+        
+        # Sort options
+        sort_col = st.selectbox("Sort by", df.columns.tolist(), 
+                               index=df.columns.get_loc("Upvotes") if "Upvotes" in df.columns else 0)
+        sort_ascending = st.checkbox("Ascending order", value=False)
+        
+        # Apply sorting
+        if sort_col in filtered_df.columns:
+            filtered_df = filtered_df.sort_values(by=sort_col, ascending=sort_ascending)
+        
+        # Display data
+        st.markdown(f"### Data Preview ({len(filtered_df)} products)")
+        st.dataframe(filtered_df)
+        
+        # Download options
+        st.download_button(
+            label="Download Filtered Data as CSV",
+            data=filtered_df.to_csv(index=False).encode('utf-8'),
+            file_name=f"filtered_{selected_file}",
+            mime="text/csv"
+        )
+    else:
+        st.error(f"File {selected_file} not found.")
 
 def display_overview(data: Dict[str, Any]):
     """Display overview with key metrics and statistics"""
@@ -279,14 +530,32 @@ def display_daily_trends(data: Dict[str, Any]):
     
     daily_data = data["daily"]
     
+    # Determine which date column is available
+    date_column = None
+    if "date" in daily_data.columns:
+        date_column = "date"
+    elif "Launch Date" in daily_data.columns:
+        date_column = "Launch Date"
+    else:
+        # Try to find a date column by checking data types
+        for col in daily_data.columns:
+            if pd.api.types.is_datetime64_any_dtype(daily_data[col]):
+                date_column = col
+                break
+    
+    if date_column is None:
+        st.error("No date column found in the daily trends data.")
+        st.dataframe(daily_data)  # Show the data for debugging
+        return
+    
     # Create daily products count chart
     st.markdown("### Daily Product Launch Count")
     
     fig = px.line(
         daily_data,
-        x="date",
+        x=date_column,
         y="products_count",
-        labels={"date": "Date", "products_count": "Number of Products"},
+        labels={date_column: "Date", "products_count": "Number of Products"},
         title="Daily Product Launches",
         markers=True
     )
@@ -300,7 +569,7 @@ def display_daily_trends(data: Dict[str, Any]):
     
     # Add total upvotes line
     fig.add_trace(go.Scatter(
-        x=daily_data["date"],
+        x=daily_data[date_column],
         y=daily_data["total_upvotes"],
         mode="lines+markers",
         name="Total Upvotes",
@@ -309,7 +578,7 @@ def display_daily_trends(data: Dict[str, Any]):
     
     # Add average upvotes line
     fig.add_trace(go.Scatter(
-        x=daily_data["date"],
+        x=daily_data[date_column],
         y=daily_data["avg_upvotes"],
         mode="lines+markers",
         name="Avg Upvotes per Product",
@@ -430,57 +699,6 @@ def display_llm_analysis(data: Dict[str, Any]):
         st.markdown("### 🤖 AI Trends")
         st.markdown(analysis["ai_trends"])
 
-def display_raw_data(raw_df: pd.DataFrame):
-    """Display raw Product Hunt data"""
-    st.markdown('<p class="sub-header">Raw Product Hunt Data</p>', unsafe_allow_html=True)
-    
-    if raw_df.empty:
-        st.warning("Raw data not available. Please run the scraper first.")
-        return
-    
-    # Display summary stats
-    st.markdown("### Data Summary")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Total Products", len(raw_df))
-    
-    with col2:
-        if "Upvotes" in raw_df.columns:
-            st.metric("Avg. Upvotes", round(raw_df["Upvotes"].mean(), 2))
-    
-    with col3:
-        date_range = None
-        if "Launch Date" in raw_df.columns:
-            min_date = raw_df["Launch Date"].min().strftime("%Y-%m-%d")
-            max_date = raw_df["Launch Date"].max().strftime("%Y-%m-%d")
-            date_range = f"{min_date} to {max_date}"
-        
-        st.metric("Date Range", date_range or "N/A")
-    
-    # Add search/filter capability
-    search_term = st.text_input("Search Products", "")
-    
-    filtered_df = raw_df
-    if search_term:
-        filtered_df = raw_df[
-            raw_df["Product Name"].str.contains(search_term, case=False) |
-            raw_df["Tagline"].str.contains(search_term, case=False) |
-            raw_df["Topics"].str.contains(search_term, case=False)
-        ]
-    
-    # Display interactive table
-    st.markdown("### All Products")
-    
-    # Format the dataframe for display
-    display_df = filtered_df.copy()
-    if "Launch Date" in display_df.columns and pd.api.types.is_datetime64_any_dtype(display_df["Launch Date"]):
-        display_df["Launch Date"] = display_df["Launch Date"].dt.strftime("%Y-%m-%d")
-    
-    # Display the data
-    st.dataframe(display_df, height=600, use_container_width=True)
-
 def main():
     """Main function to run the Streamlit app"""
     # Display header
@@ -490,15 +708,20 @@ def main():
     selected_view = display_sidebar_controls()
     
     # Load analysis data
-    analysis_data = load_analysis_data()
+    analysis_data = {}
+    if selected_view not in ["Data Collection", "Raw CSV Data"]:
+        analysis_data = load_analysis_data()
     
     # Load raw data if needed
     raw_df = pd.DataFrame()
-    if selected_view == "Raw Data":
+    if selected_view == "Raw CSV Data":
         raw_df = load_raw_data()
     
-    # Display the selected view
-    if selected_view == "Overview":
+    # Display selected view
+    if selected_view == "Data Collection":
+        display_data_collection()
+    
+    elif selected_view == "Overview":
         display_overview(analysis_data)
     
     elif selected_view == "Topic Analysis":
@@ -513,8 +736,8 @@ def main():
     elif selected_view == "AI & B2B Trends (LLM Analysis)":
         display_llm_analysis(analysis_data)
     
-    elif selected_view == "Raw Data":
-        display_raw_data(raw_df)
+    elif selected_view == "Raw CSV Data":
+        display_raw_csv_data()
 
 if __name__ == "__main__":
     main() 

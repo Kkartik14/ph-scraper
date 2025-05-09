@@ -1,0 +1,14 @@
+{
+  "total_products": 1224,
+  "date_range": {
+    "start": "2025-05-05",
+    "end": "2025-05-09",
+    "days": 5
+  },
+  "upvotes": {
+    "average": 22.35,
+    "median": 4.0,
+    "max": 641,
+    "max_product": "remio"
+  }
+}

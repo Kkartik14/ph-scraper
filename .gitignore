@@ -45,6 +45,7 @@ product_hunt_data.csv
 env/
 venv/
 ENV/
+fresh_env/
 env.bak/
 venv.bak/
 

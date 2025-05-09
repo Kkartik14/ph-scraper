@@ -23,12 +23,13 @@ A Python toolkit to scrape Product Hunt launches using the GraphQL API, analyze 
 - Exports analysis to various formats (JSON, CSV)
 
 ### Visualization (Streamlit Dashboard)
+- **Data Collection**: Configure and run the scraper directly from the UI
+- **Raw CSV Data View**: Explore, filter, and download the raw data
 - Interactive data exploration
 - Topic distribution charts and treemaps
 - Daily trend charts and statistics
 - Top product rankings and details
 - AI and B2B trend analysis
-- Raw data search and filtering
 
 ## Setup
 
@@ -43,7 +44,7 @@ A Python toolkit to scrape Product Hunt launches using the GraphQL API, analyze 
    # Groq API Key for LLM Analysis
    GROQ_API_KEY=your_groq_api_key_here
    ```
-4. Run the complete pipeline: `./run_ph_pipeline.sh`
+4. Run the application: `./run_ph_pipeline.sh` or directly with `streamlit run streamlit_app.py`
 
 ## Components
 
@@ -61,13 +62,6 @@ python ph_scraper.py --days 7
 python ph_scraper.py --mode top --periods today week month
 ```
 
-### scrape_last_30_days.py
-Script to scrape the last 30 days of Product Hunt data.
-
-```bash
-python scrape_last_30_days.py
-```
-
 ### ph_analyzer.py
 Analyzes the scraped data to identify trends, patterns, and insights.
 
@@ -76,38 +70,56 @@ python ph_analyzer.py
 ```
 
 ### streamlit_app.py
-Interactive dashboard for data visualization and exploration.
+Interactive dashboard for data collection, visualization, and exploration.
 
 ```bash
 streamlit run streamlit_app.py
 ```
 
 ### run_ph_pipeline.sh
-Shell script to run the complete pipeline (scraping, analysis, visualization).
+Shell script to start the Streamlit app.
 
 ```bash
 ./run_ph_pipeline.sh
 ```
 
+## Using the Application
+
+### Data Collection
+1. Launch the application and navigate to the "Data Collection" view
+2. Configure the scraping parameters:
+   - Number of days to scrape
+   - Timezone settings
+   - Stealth mode options
+   - Output filename
+3. Click "Start Scraping" to begin data collection
+4. After collection completes, you can run analysis directly from the same page
+
+### Raw CSV Data
+- View, filter, and sort the collected raw data
+- Search through all fields
+- Download filtered results as CSV
+
+### Analysis Views
+After running the analyzer, explore different views:
+- Overview (key metrics and statistics)
+- Topic Analysis (distribution and trends)
+- Daily Trends (charts and patterns)
+- Top Products (rankings and details)
+- AI & B2B Trends (LLM-powered insights)
+
 ## Advanced Options
 
 ### Scraper Options
-```bash
-# Specify custom output file
-python ph_scraper.py --output custom_filename.csv
-
-# Disable stealth features (faster but may hit rate limits)
-python ph_scraper.py --no-stealth
-
-# Use PST timezone (Product Hunt's timezone) instead of UTC
-python ph_scraper.py --use-pst
-
-# Set maximum number of products to fetch per day/period
-python ph_scraper.py --limit 200
-```
+All scraper options are configurable from the Streamlit UI:
+- Number of days to scrape (1-90)
+- PST timezone toggle 
+- Stealth mode toggle
+- Maximum products per day
+- Custom output filename
 
 ### Analyzer Options
-The analyzer automatically processes data from `product_hunt_30_days.csv` and saves results to the `analysis/` directory.
+The analyzer is integrated directly into the Streamlit app and will process any CSV file you select.
 
 ### Streamlit Options
 ```bash
@@ -123,7 +135,7 @@ streamlit run streamlit_app.py --server.headless true
 Product Hunt operates in Pacific Standard Time (PST). This becomes important when scraping "today's" products:
 
 - By default, the scraper uses UTC time
-- When using `--use-pst`, the scraper will use PST timezone for date calculations
+- When enabling "Use PST timezone" in the UI, the scraper will use PST timezone for date calculations
 - Using PST is recommended for the most accurate results since you might miss today's products if it's still the previous day in PST
 
 ## LLM Trend Analysis

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Product Hunt Analytics Pipeline
-# This script runs the complete pipeline: scraping, analysis, and visualization
+# This script launches the Streamlit app for data collection, analysis, and visualization
 
 echo "========================================"
 echo "Product Hunt Analytics Pipeline"
@@ -37,35 +37,15 @@ if [ ! -f .env ]; then
     fi
 fi
 
-# Step 1: Scrape data
+# Launch the Streamlit app
 echo
 echo "========================================"
-echo "Step 1: Scraping Product Hunt data for the last 30 days"
-echo "========================================"
-python3 scrape_last_30_days.py
-if [ $? -ne 0 ]; then
-    echo "Error: Scraping failed. Please check the logs."
-    exit 1
-fi
-
-# Step 2: Analyze data
-echo
-echo "========================================"
-echo "Step 2: Analyzing scraped data"
-echo "========================================"
-python3 ph_analyzer.py
-if [ $? -ne 0 ]; then
-    echo "Error: Analysis failed. Please check the logs."
-    exit 1
-fi
-
-# Step 3: Launch Streamlit app
-echo
-echo "========================================"
-echo "Step 3: Launching Streamlit visualization app"
+echo "Launching Product Hunt Trends Dashboard"
 echo "========================================"
 echo "Starting Streamlit app at http://localhost:8501"
+echo "Use the web interface to collect data, view the raw CSV, and analyze trends."
+echo "========================================"
 streamlit run streamlit_app.py
 
 echo
-echo "Pipeline completed successfully!" 
+echo "Streamlit app stopped." 
