@@ -195,7 +195,7 @@ class ProductHuntScraper:
         date_obj = datetime.datetime.fromisoformat(date_str)
         next_day = date_obj + datetime.timedelta(days=1)
         
-        logger.info(f"Fetching posts for {date_str}")
+        logger.info(f"Fetching posts for {date_str} (from {date_str}T00:00:00Z to {next_day.strftime('%Y-%m-%d')}T00:00:00Z)")
         
         # GraphQL query for posts - updated to match current API schema
         query = """
