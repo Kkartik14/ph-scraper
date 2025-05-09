@@ -9,6 +9,7 @@ A Python tool to automatically scrape Product Hunt launches using the GraphQL AP
 - Outputs structured data to a CSV file
 - Stealth mode with randomized delays and user agent rotation to avoid detection
 - Robust error handling and retry mechanisms
+- Timezone handling (UTC or PST) to match Product Hunt's timezone
 
 ## Setup
 
@@ -16,8 +17,8 @@ A Python tool to automatically scrape Product Hunt launches using the GraphQL AP
 2. Install dependencies: `pip install -r requirements.txt`
 3. Create a `.env` file with your Product Hunt API credentials:
    ```
-   PH_CLIENT_ID=your_client_id
-   PH_CLIENT_SECRET=your_client_secret
+   PH_CLIENT_ID=your_client_id_here
+   PH_CLIENT_SECRET=your_client_secret_here
    ```
 4. Run the scraper: `python ph_scraper.py`
 
@@ -63,7 +64,18 @@ python ph_scraper.py --output custom_filename.csv
 
 # Disable stealth features (faster but may hit rate limits)
 python ph_scraper.py --no-stealth
+
+# Use PST timezone (Product Hunt's timezone) instead of UTC
+python ph_scraper.py --use-pst
 ```
+
+## Timezone Handling
+
+Product Hunt operates in Pacific Standard Time (PST). This becomes important when scraping "today's" products:
+
+- By default, the scraper uses UTC time
+- When using `--use-pst`, the scraper will use PST timezone for date calculations
+- Using PST is recommended for the most accurate results since you might miss today's products if it's still the previous day in PST
 
 ## Getting Product Hunt API Credentials
 
