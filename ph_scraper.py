@@ -12,6 +12,7 @@ import datetime
 import random
 import logging
 from typing import Dict, List, Any, Optional, Union
+import pytz
 
 import requests
 import pandas as pd
@@ -350,18 +351,29 @@ class ProductHuntScraper:
             
         return processed_posts
 
-    def scrape_recent_days(self, days: int = 3) -> List[Dict[str, Any]]:
+    def scrape_recent_days(self, days: int = 3, use_pst: bool = False) -> List[Dict[str, Any]]:
         """
         Scrape posts from the past N days
         
         Args:
             days: Number of days to scrape (default: 3)
+            use_pst: Whether to use PST timezone for date calculations
             
         Returns:
             Combined list of processed posts
         """
         all_posts = []
-        today = datetime.datetime.now().date()
+        
+        # Calculate the start date based on the timezone preference
+        if use_pst:
+            # Use PST (Product Hunt's timezone)
+            now_utc = datetime.datetime.now(pytz.UTC)
+            now_pst = now_utc.astimezone(pytz.timezone('US/Pacific'))
+            today = now_pst.date()
+            logger.info(f"Using PST date: {today.isoformat()} for calculations")
+        else:
+            # Use UTC
+            today = datetime.datetime.now().date()
         
         # Add some randomization to day order for more natural pattern
         day_order = list(range(days))
@@ -441,14 +453,27 @@ def main():
         action="store_true",
         help="Disable stealth features (no delays, no user agent rotation)"
     )
+    parser.add_argument(
+        "--use-pst",
+        action="store_true",
+        help="Use PST timezone (Product Hunt's timezone) instead of UTC"
+    )
     args = parser.parse_args()
     
     try:
         # Create scraper
         scraper = ProductHuntScraper(use_stealth=not args.no_stealth)
         
+        # Get timezone info if requested
+        if args.use_pst:
+            now_utc = datetime.datetime.now(pytz.UTC)
+            now_pst = now_utc.astimezone(pytz.timezone('US/Pacific'))
+            logger.info(f"Current time (UTC): {now_utc}")
+            logger.info(f"Current time (PST/Product Hunt timezone): {now_pst}")
+            logger.info(f"Using PST timezone for date calculations")
+        
         # Scrape data
-        posts = scraper.scrape_recent_days(args.days)
+        posts = scraper.scrape_recent_days(args.days, use_pst=args.use_pst)
         
         # Export data
         if posts:
